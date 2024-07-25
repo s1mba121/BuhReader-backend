@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "root",
+    "password": "rider2003",
+    "database": "buhreader",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "test": {
+    "username": "root",
+    "password": "rider2003",
+    "database": "buhreader",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "production": {
+    "username": "root",
+    "password": "rider2003",
+    "database": "buhreader",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  }
+}

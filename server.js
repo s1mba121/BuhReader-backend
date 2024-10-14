@@ -31,14 +31,12 @@ sequelize
 const authRoutes = require("./routes/auth");
 const subscriptionRoutes = require("./routes/subscriptions");
 const invoiceRoutes = require("./routes/invoice");
-const dataRoutes = require("./routes/dataRoutes");
 
 const app = express();
 
 app.use(cors()); // Enable CORS
 app.use(bodyParser.json());
 
-app.use("/api", dataRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/subscription", subscriptionRoutes);
 app.use("/api/invoice", invoiceRoutes);

@@ -8,7 +8,7 @@ const router = express.Router();
 router.post(
     "/read-invoice",
     authMiddleware,
-    upload.single("file"),
+    upload.array("files", 10), // Change to array and specify field name and limit
     invoiceController.readInvoice
 );
 

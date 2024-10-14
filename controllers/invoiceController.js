@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const pdf = require("pdf-parse");
 const axios = require("axios");
+const pdfPoppler = require("pdf-poppler");
 require("dotenv").config();
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -20,6 +21,36 @@ async function extractTextFromPDF(pdfPath) {
         console.error("Error extracting text from PDF:", error.message);
         throw new Error("Error extracting text from PDF");
     }
+}
+
+// Function to convert PDF to image
+async function convertPDFToImage(pdfPath) {
+    try {
+        const outputDir = path.dirname(pdfPath);
+        const outputPath = path.join(
+            outputDir,
+            path.basename(pdfPath, path.extname(pdfPath))
+        );
+
+        const opts = {
+            format: "jpeg",
+            out_dir: outputDir,
+            out_prefix: path.basename(pdfPath, path.extname(pdfPath)),
+            page: null,
+        };
+
+        await pdfPoppler.convert(pdfPath, opts);
+        return `${outputPath}-1.jpg`;
+    } catch (error) {
+        console.error("Error converting PDF to image:", error.message);
+        throw new Error("Error converting PDF to image");
+    }
+}
+
+// Function to encode image to base64
+function encodeImage(imagePath) {
+    const imageBuffer = fs.readFileSync(imagePath);
+    return imageBuffer.toString("base64");
 }
 
 // Функция для извлечения данных из текста с помощью OpenAI API
@@ -91,15 +122,71 @@ async function extractDataFromDocument(textData) {
     }
 }
 
-// Основная функция для обработки PDF файла
+// Function to extract data from image using OpenAI API
+async function extractDataFromImage(imagePath) {
+    try {
+        const base64Image = encodeImage(imagePath);
+        const response = await axios.post(
+            apiUrl,
+            {
+                model: "gpt-4o-mini",
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            {
+                                type: "text",
+                                text: "The image appears to be a receipt, likely for a purchase made at a store or service. It contains various details, including the date, an itemized list of purchases, the total amount, VAT (value-added tax), and other transaction information. Extract the following data in the format DATA:Numer Faktury;Data;Nazwa klienta;NIP klienta;Wartość netto;VAT;Wartość VAT;Wartość brutto, followed by items in the format ITEM:Nazwa towaru/usługi;Ilość;J.m.;Cena netto;Wartość netto;VAT;Kwota VAT;Wartość brutto:",
+                            },
+                            {
+                                type: "image_url",
+                                image_url: {
+                                    url: `data:image/jpeg;base64,${base64Image}`,
+                                },
+                            },
+                        ],
+                    },
+                ],
+                max_tokens: 300,
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${openaiApiKey}`,
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        const imageDescription =
+            response.data.choices[0].message.content.trim();
+        console.log("Image Description:", imageDescription);
+
+        const dataExtractionPrompt = `
+            The image appears to be a receipt, likely for a purchase made at a store or service. It contains various details, including the date, an itemized list of purchases, the total amount, VAT (value-added tax), and other transaction information. 
+            Extract the following data in the format DATA:Numer Faktury;Data;Nazwa klienta;NIP klienta;Wartość netto;VAT;Wartość VAT;Wartość brutto, followed by items in the format ITEM:Nazwa towaru/usługi;Ilość;J.m.;Cena netto;Wartość netto;VAT;Kwota VAT;Wartość brutto:
+        `;
+
+        return extractDataFromDocument(
+            `${imageDescription}\n${dataExtractionPrompt}`
+        );
+    } catch (error) {
+        console.error("Error extracting data from image:", error.message);
+        throw new Error("Error extracting data from image");
+    }
+}
+
+// Main function to process PDF file
 async function extractDataFromPDF(pdfPath) {
     try {
         const textData = await extractTextFromPDF(pdfPath);
-        const extractedData = await extractDataFromDocument(textData);
-        return extractedData;
+        return await extractDataFromDocument(textData);
     } catch (error) {
-        console.error("Error processing PDF:", error.message);
-        throw new Error("Error processing PDF");
+        console.error(
+            "Failed to extract text from PDF, converting to image..."
+        );
+
+        const jpgPath = await convertPDFToImage(pdfPath);
+        return extractDataFromImage(jpgPath);
     }
 }
 
@@ -144,20 +231,50 @@ exports.readInvoice = async (req, res) => {
             }
         }
 
-        if (!req.file) {
-            return res.status(400).json({ error: "No file uploaded" });
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: "No files uploaded" });
         }
 
-        const pdfPath = req.file.path;
+        const extractedDataArray = [];
 
-        try {
-            const extractedData = await extractDataFromPDF(pdfPath);
-            console.log("Sending Extracted Data:", extractedData);
-            res.status(201).json({ data: extractedData });
-        } catch (error) {
-            console.error("Failed to extract data from PDF:", error.message);
-            res.status(500).json({ error: "Failed to extract data from PDF" });
+        for (const file of req.files) {
+            const pdfPath = file.path;
+
+            try {
+                let extractedData = await extractDataFromPDF(pdfPath);
+                console.log("Extracted Data:", extractedData);
+
+                // Check if key fields are empty
+                if (
+                    !extractedData.date ||
+                    !extractedData.clientName ||
+                    !extractedData.clientNIP ||
+                    !extractedData.netValue ||
+                    !extractedData.vatRate ||
+                    !extractedData.vatValue ||
+                    !extractedData.grossValue
+                ) {
+                    console.log(
+                        "Key fields are empty, converting PDF to image..."
+                    );
+                    const jpgPath = await convertPDFToImage(pdfPath);
+                    extractedData = await extractDataFromImage(jpgPath);
+                }
+
+                console.log("Sending Extracted Data:", extractedData);
+                extractedDataArray.push(extractedData);
+            } catch (error) {
+                console.error(
+                    "Failed to extract data from PDF:",
+                    error.message
+                );
+                return res
+                    .status(500)
+                    .json({ error: "Failed to extract data from PDF" });
+            }
         }
+
+        res.status(201).json({ data: extractedDataArray });
     } catch (error) {
         console.error("Failed to read invoice:", error.message);
         res.status(500).json({ error: "Failed to read invoice" });
